@@ -1,3 +1,4 @@
+AddCSLuaFile()
 local Package = {}
 
 local _setmetatable = setmetatable

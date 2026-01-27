@@ -1,25 +1,10 @@
-Modulus = include 'modulus/utils/modulus.lua'
+AddCSLuaFile()
 
-local Path = include 'modulus/utils/path.lua'
+local modulus = include 'modulus/utils/modulus.lua'
 local Graph = include 'modulus/utils/graph.lua'
-local Module = include 'modulus/utils/module.lua'
 
-local LoggingModule = Module.FromModuleInfo({
-        uid = 'modulus-logging',
-        authors = {'K4su'},
-        dependencies = {},
-        description = 'Logging framework'
-}, true)
-
-local Logger = include 'modulus/utils/logger.lua'
-local Original = getmetatable(LoggingModule)
-local Logging = setmetatable(LoggingModule, { __index = function(tbl, key)
-    local val = Logger[key]
-    if val ~= nil then return val end
-    return Original.__index[key]
-end })
-
-local Log = Logging.Create('modulus')
+-- Temporary alias (In future: Modulus will be scoped per module)
+Modulus = modulus
 
 
 local function BuildDependencyGraph(modules)
@@ -30,111 +15,91 @@ local function BuildDependencyGraph(modules)
         graph[moduleName] = moduleInfo:GetDependencies() or {}
     end
 
-    return graph
+    return Graph.FromDependencyTable(graph)
 end
+
+
+modulus:LoadInternalModules()
+local Logger = modulus:GetModule('modulus-logging').Create('modulus')
 
 
 local sep = string.rep('=', 100)
-Log:Info(sep)
-Log:Info('Modulus Initialisation')
-Log:Info(sep)
+Logger:Info(sep)
+Logger:Info('Modulus Initialisation')
+Logger:Info(sep)
 
+-- Steps
 
-concommand.Remove('modulus')
-concommand.Add('modulus', function(ply, cmd, args)
-    if not (ply == NULL) then return end
+-- Scan modules (load module info)
+-- Check module dependencies and load order
+-- Send module info & load order to client
+-- Load modules in order (client & server)
+hook.Add('Modulus::Internal::LoadModules', 'Modulus::Initialisation', function(loadOrder)
 
-    local subCommand = args[1]
-    if subCommand == 'scan'
-    then
-        Log:Info('Scanning for modules...')
-        Modulus:ScanModules()
+    Logger:Info('Loading modules...')
+
+    hook.Run('Modulus::PreInitialised', Modulus)
+
+    for _, moduleName in pairs(loadOrder)
+    do
+        local module = modulus:GetModule(moduleName)
+        -- Prevent loading of internal modules (e.g. logging)
+        if module.loaded then continue end
+
+        hook.Run('Modulus::PreLoadModule', moduleName, module)
+        modulus:LoadModule(moduleName)
+        hook.Run('Modulus::PostLoadModule', moduleName, module)
+        hook.Run('Modulus::ModuleLoaded', moduleName, module)
     end
+
+    hook.Run('Modulus::PostInitialised', Modulus)
 end)
 
 
+if SERVER
+then
+    Logger:Info('Scanning modules...')
 
-Log:Info('Scanning modules...')
-Modulus:ScanModules()
-Modulus.modules['modulus-logging'] = Logging
--- setmetatable(Modulus.modules['modulus-logging'], { __index = table.concat(Logger, getmetatable(Modulus.modules['modulus-logging'])) })
+    modulus:ScanModules()
+    local modules = modulus:GetModules()
+    local graph = BuildDependencyGraph(modules)
 
-local graph = BuildDependencyGraph(Modulus.modules)
-
-
-for moduleName, moduleInfo in pairs(Modulus.modules)
-do
-    if not moduleInfo.active
-    then
-        Log:Warn('Module %s has been deactivated, reasons: %s', moduleName, table.concat(moduleInfo.reasons, '|') or 'n/a')
-    end
-end
-
-
--- Iterate through graph, filter out inactive modules
-for moduleName in pairs(Modulus.modules)
-do
-    if not Modulus.modules[moduleName].active
-    then
-        graph[moduleName] = nil
-    end
-end
-
-local function TopologicalSort(graph)
-    local order = {}
-    local finished = {}
-
-    for node in pairs(graph)
+    for moduleName, moduleInfo in pairs(modules)
     do
-        if not finished[node]
+        if not moduleInfo.active
         then
-            local stack = {}
-            Graph.DFS(graph, node, function(node)
-                if finished[node] then return end
-
-                table.insert(stack, 1, node)
-                finished[node] = true
-            end)
-            for _, entry in pairs(stack) do table.insert(order, entry) end
+            Logger:Warn('Module %s has been deactivated, reasons: %s', moduleName, table.concat(moduleInfo.reasons, '|') or 'n/a')
         end
     end
 
-    return order
-end
-
-local loadOrder = TopologicalSort(graph)
-
-local LoadModule = function(moduleName)
-    local module = Modulus.modules[moduleName]
-    if not module then return end
-
-    local initFile = Path / module:GetPath() / 'init.lua'
-    if not file.Exists(initFile, 'LUA')
-    then
-        Log:Warn('Module %s is missing init.lua file', moduleName)
-        return false
+    -- Iterate through graph, filter out inactive modules
+    for moduleName in pairs(modulus:GetModules())
+    do
+        if not modulus:GetModule(moduleName).active
+        then
+            graph[moduleName] = nil
+        end
     end
 
-    if file.Read(initFile, 'LUA') == ''
-    then
-        Log:Warn('Can not include empty init.lua file for module %s', moduleName)
-        return false
+    local loadOrder = graph:TopologicalSort()
+
+    -- Hack: Before sync, we need to 'AddCSLuaFile' every init.lua file
+    for _, moduleName in pairs(loadOrder)
+    do
+        local module = modulus:GetModule(moduleName)
+        if module.loaded then continue end
+        local initPath = module:GetPath() .. '/init.lua'
+        if file.Exists(initPath, 'LUA')
+        then
+            AddCSLuaFile(initPath)
+        end
     end
 
-    return include(initFile)
+    modulus:SyncModules(loadOrder)
+    timer.Simple(0, function() hook.Call('Modulus::Internal::LoadModules', nil, loadOrder) end)
 end
 
-hook.Run('Modulus::PreInitialised', Modulus)
-
-for _, moduleName in pairs(loadOrder)
-do
-    local module = Modulus.modules[moduleName]
-    -- Prevent loading of internal modules (e.g. logging)
-    if module.loaded then continue end
-
-    hook.Run('Modulus::PreLoadModule', moduleName, module)
-    LoadModule(moduleName)
-    hook.Run('Modulus::PostLoadModule', moduleName, module)
+if CLIENT
+then
+    modulus:SyncModules()
 end
-
-hook.Run('Modulus::PostInitialised', Modulus)
