@@ -10,7 +10,7 @@ Modulus = modulus
 local function BuildDependencyGraph(modules)
     local graph = {}
 
-    for moduleName, moduleInfo in pairs(modules)
+    for moduleName, moduleInfo in ipairs(modules)
     do
         graph[moduleName] = moduleInfo:GetDependencies() or {}
     end
@@ -40,7 +40,7 @@ hook.Add('Modulus::Internal::LoadModules', 'Modulus::Initialisation', function(l
 
     hook.Run('Modulus::PreInitialised', Modulus)
 
-    for _, moduleName in pairs(loadOrder)
+    for _, moduleName in ipairs(loadOrder)
     do
         local module = modulus:GetModule(moduleName)
         -- Prevent loading of internal modules (e.g. logging)
@@ -64,7 +64,7 @@ then
     local modules = modulus:GetModules()
     local graph = BuildDependencyGraph(modules)
 
-    for moduleName, moduleInfo in pairs(modules)
+    for moduleName, moduleInfo in ipairs(modules)
     do
         if not moduleInfo.active
         then
@@ -73,7 +73,7 @@ then
     end
 
     -- Iterate through graph, filter out inactive modules
-    for moduleName in pairs(modulus:GetModules())
+    for moduleName in ipairs(modulus:GetModules())
     do
         if not modulus:GetModule(moduleName).active
         then
@@ -84,7 +84,7 @@ then
     local loadOrder = graph:TopologicalSort()
 
     -- Hack: Before sync, we need to 'AddCSLuaFile' every init.lua file
-    for _, moduleName in pairs(loadOrder)
+    for _, moduleName in ipairs(loadOrder)
     do
         local module = modulus:GetModule(moduleName)
         if module.loaded then continue end
