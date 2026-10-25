@@ -8,35 +8,44 @@ local _table_insert = table.insert
 local Graph = {}
 _setfenv(1, Graph)
 
-
 -- Visits all the node in a graph using Depth-First Search (DFS)
 -- @param self       the graph table
 -- @param startNode  the node to start DFS from
--- @param visit      callback when a node has been visited
+-- @param visit      callback when a node is first entered (pre-order)
+-- @param postVisit  callback when a node is exited (post-order)
 --
--- @return  true if a cycle was detected
-function DFS(self, startNode, visit)
+-- @return  nil if no cycle, last node visited if cycle detected
+function DFS(self, startNode, visit, postVisit)
     local visited = {}
+
     local iter
     local visitNode = function(node)
         if visit then visit(node) end
         visited[node] = true
     end
 
-    iter = function(node)
-        -- Cycle detected
-        if visited[node] then return true end
+    iter = function(node, stack)
+        -- Already visited in this recursion, cycle detected
+        if stack[node] then return node end
+        -- Already visited, we can skip
+        if visited[node] then return end
+
         visitNode(node)
-        local cycle = false
+
+        stack[node] = true
+        local cycle
         for _, child in _pairs(self[node] or {})
         do
-            cycle = iter(child) or cycle
+            cycle = iter(child, stack) or cycle
         end
+        stack[node] = nil
+
+        if postVisit then postVisit(node) end
 
         return cycle
     end
 
-    return iter(startNode)
+    return iter(startNode, {})
 end
 
 
@@ -57,8 +66,13 @@ function FindCycles(self)
                 _table_insert(stack, n)
                 finished[n] = true
             end)
-            -- Cycle has been found, append the call stack to the result list
-            if result then _table_insert(cycles, stack) end
+
+            if result
+            then
+                -- Cycle has been found, append the call stack to the result list
+                _table_insert(stack, result)
+                _table_insert(cycles, stack)
+            end
         end
     end
 
@@ -66,7 +80,7 @@ function FindCycles(self)
 end
 
 
--- Inverts the direction of all edges in the graph
+-- Inverts the direction of all edges in a graph
 -- @param self  the graph object
 --
 -- @return  the graph with inverted edges
@@ -94,19 +108,18 @@ function TopologicalSort(self)
     local order = {}
     local finished = {}
 
+    local function postVisit(n)
+        if not finished[n] then
+            _table_insert(order, n)
+            finished[n] = true
+        end
+    end
+
     for node in _pairs(self)
     do
         if not finished[node]
         then
-            local stack = {}
-            self:DFS(node, function(n)
-                if finished[n] then return end
-
-                _table_insert(stack, 1, n)
-                finished[n] = true
-            end)
-
-            for _, entry in _pairs(stack) do _table_insert(order, entry) end
+            self:DFS(node, nil, postVisit)
         end
     end
 
